@@ -1,34 +1,54 @@
 import numpy as np
 import sys
+import matplotlib.pyplot as plt
+import time
+from typing import List, Tuple, Dict
 
 def sigmoid(z):
     """
-    Compute the sigmoid function
-    
-    Args:
+    Sigmoid function
+
+    params:
         z (numpy.ndarray): Input values
         
-    Returns:
+    return:
         numpy.ndarray: Sigmoid of input values
     """
     return 1 / (1 + np.exp(-z))
 
+def compute_accuracy(X, y, weights, bias):
+    """
+    Compute accuracy for current model parameters
+    
+    params:
+        X (numpy.ndarray): Features
+        y (numpy.ndarray): True labels
+        weights (numpy.ndarray): Model weights
+        bias (float): Model bias
+        
+    return:
+        float: Accuracy score
+    """
+    predictions = sigmoid(np.dot(X, weights) + bias) >= 0.5
+    return np.mean(predictions == y)
+
 def train_logistic_regression(X, y, learning_rate, num_epochs):
     """
-    Train a logistic regression model using gradient descent
+    Logistic regression model using gradient descent
     
-    Args:
+    params:
         X (numpy.ndarray): Training features of shape (n_samples, n_features)
         y (numpy.ndarray): Target values of shape (n_samples,)
         learning_rate (float): The step size for gradient descent
         num_epochs (int): Number of epochs for gradient descent
         
-    Returns:
-        tuple: (weights, bias) - Trained model parameters
+    return:
+        tuple: (weights, bias, accuracies) - Trained model parameters and accuracy history
     """
     n_samples, n_features = X.shape
     weights = np.zeros(n_features)
     bias = 0
+    accuracies = []
     
     for _ in range(num_epochs):
         # Forward pass
@@ -42,23 +62,451 @@ def train_logistic_regression(X, y, learning_rate, num_epochs):
         # Update parameters
         weights -= learning_rate * dw
         bias -= learning_rate * db
+        
+        # Track accuracy for 
+        accuracy = compute_accuracy(X, y, weights, bias)
+        accuracies.append(accuracy)
             
-    return weights, bias
+    return weights, bias, accuracies
 
 def load_data(filename):
     """
-    Load data from file
+    Load data
     
-    Args:
+    params:
         filename (str): Path to the data file
         
-    Returns:
+    return:
         tuple: Features array and labels array
     """
     data = np.loadtxt(filename, delimiter=' ')
     X = data[:, :-1]  # All columns except last
     y = data[:, -1]   # Last column
     return X, y
+
+def plot_accuracy_vs_epoch(train_file, learning_rates, num_epochs, num_runs=5):
+    """
+    Plot accuracy vs epoch for different learning rates
+    
+    params:
+        train_file (str): Path to training data
+        learning_rates (list): List of learning rates to try
+        num_epochs (int): Number of epochs to train
+        num_runs (int): Number of runs for each learning rate
+    """
+    X, y = load_data(train_file)
+    plt.figure(figsize=(10, 6))
+    
+    for lr in learning_rates:
+        all_accuracies = []
+        for _ in range(num_runs):
+            _, _, accuracies = train_logistic_regression(X, y, lr, num_epochs)
+            all_accuracies.append(accuracies)
+        
+        mean_accuracies = np.mean(all_accuracies, axis=0)
+        std_accuracies = np.std(all_accuracies, axis=0)
+        epochs = np.arange(1, num_epochs + 1)
+        
+        plt.plot(epochs, mean_accuracies, label=f'lr={lr}')
+        plt.fill_between(epochs, 
+                        mean_accuracies - std_accuracies,
+                        mean_accuracies + std_accuracies,
+                        alpha=0.2)
+    
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy vs Epoch for Different Learning Rates')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig('accuracy_vs_epoch.png')
+    plt.close()
+
+def train_sgd_logistic_regression(X: np.ndarray, y: np.ndarray, learning_rate: float, 
+                                num_epochs: int, batch_size: int) -> Tuple[np.ndarray, float, List[float], Dict]:
+    """
+    Train logistic regression using SGD with specified batch size
+    
+    params:
+        X: Training features
+        y: Target values
+        learning_rate: Learning rate for gradient descent
+        num_epochs: Number of epochs
+        batch_size: Mini-batch size
+        
+    return:
+        Tuple containing:
+        - weights: Trained weights
+        - bias: Trained bias
+        - accuracies: List of accuracies per epoch
+        - metrics: Dictionary with computational metrics
+    """
+    n_samples, n_features = X.shape
+    weights = np.zeros(n_features)
+    bias = 0
+    accuracies = []
+    
+    # Metrics tracking
+    start_time = time.time()
+    total_flops = 0
+    
+    for epoch in range(num_epochs):
+        # Shuffle data
+        indices = np.random.permutation(n_samples)
+        X_shuffled = X[indices]
+        y_shuffled = y[indices]
+        
+        # Mini-batch training
+        for i in range(0, n_samples, batch_size):
+            batch_X = X_shuffled[i:i + batch_size]
+            batch_y = y_shuffled[i:i + batch_size]
+            batch_size_actual = len(batch_X)
+            
+            # Forward pass
+            linear_model = np.dot(batch_X, weights) + bias  # n*d FLOPs
+            y_predicted = sigmoid(linear_model)  # n FLOPs
+            
+            # Compute gradients
+            dw = (1/batch_size_actual) * np.dot(batch_X.T, (y_predicted - batch_y))  # 2*n*d FLOPs
+            db = (1/batch_size_actual) * np.sum(y_predicted - batch_y)  # n FLOPs
+            
+            # Update parameters
+            weights -= learning_rate * dw
+            bias -= learning_rate * db
+            
+            # Track FLOPs
+            total_flops += batch_size_actual * (4 * n_features + 2)
+        
+        # Track accuracy per epoch
+        accuracy = compute_accuracy(X, y, weights, bias)
+        accuracies.append(accuracy)
+    
+    wall_time = time.time() - start_time
+    
+    metrics = {
+        'wall_time': wall_time,
+        'total_flops': total_flops,
+        'flops_per_epoch': total_flops / num_epochs
+    }
+    
+    return weights, bias, accuracies, metrics
+
+def analyze_sgd_performance(train_file: str, learning_rate: float, num_epochs: int, 
+                          batch_sizes: List[int]) -> None:
+    """
+    Analyze SGD performance for different batch sizes
+    
+    params:
+        train_file: Path to training data
+        learning_rate: Learning rate
+        num_epochs: Number of epochs
+        batch_sizes: List of batch sizes to try
+    """
+    X, y = load_data(train_file)
+    n_samples = len(X)
+    
+    # Metrics storage
+    all_metrics = []
+    all_accuracies = []
+    
+    plt.figure(figsize=(15, 5))
+    
+    # Training with different batch sizes
+    for batch_size in batch_sizes:
+        weights, bias, accuracies, metrics = train_sgd_logistic_regression(
+            X, y, learning_rate, num_epochs, batch_size
+        )
+        
+        all_metrics.append({
+            'batch_size': batch_size,
+            **metrics
+        })
+        all_accuracies.append(accuracies)
+    
+    # Plot 1: Accuracy vs Epoch for different batch sizes
+    plt.subplot(1, 3, 1)
+    for i, batch_size in enumerate(batch_sizes):
+        plt.plot(range(1, num_epochs + 1), all_accuracies[i], 
+                label=f'Batch Size={batch_size}')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Convergence by Batch Size')
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot 2: Wall Time vs Batch Size
+    plt.subplot(1, 3, 2)
+    wall_times = [m['wall_time'] for m in all_metrics]
+    plt.semilogx(batch_sizes, wall_times, '-o')
+    plt.xlabel('Batch Size (log scale)')
+    plt.ylabel('Wall Time (seconds)')
+    plt.title('Wall Time vs Batch Size')
+    plt.grid(True)
+    
+    # Plot 3: FLOPs per Epoch vs Batch Size
+    plt.subplot(1, 3, 3)
+    flops_per_epoch = [m['flops_per_epoch'] for m in all_metrics]
+    plt.semilogx(batch_sizes, flops_per_epoch, '-o')
+    plt.xlabel('Batch Size (log scale)')
+    plt.ylabel('FLOPs per Epoch')
+    plt.title('Computational Cost vs Batch Size')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('sgd_analysis.png')
+    plt.close()
+    
+    # Print detailed metrics
+    print("\nSGD Performance Analysis:")
+    print("-" * 80)
+    print(f"{'Batch Size':^12} | {'Wall Time (s)':^15} | {'FLOPs/Epoch':^15} | {'Total FLOPs':^15}")
+    print("-" * 80)
+    for metrics in all_metrics:
+        print(f"{metrics['batch_size']:^12} | {metrics['wall_time']:^15.3f} | "
+              f"{metrics['flops_per_epoch']:^15.2e} | {metrics['total_flops']:^15.2e}")
+
+def initialize_mlp_params(input_size: int, hidden_size: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Initialize MLP parameters with Xavier/Glorot initialization
+    
+    params:
+        input_size: Number of input features
+        hidden_size: Number of hidden units
+        
+    return:
+        Tuple of weights and biases (W1, b1, W2, b2)
+    """
+    W1 = np.random.randn(input_size, hidden_size) * np.sqrt(2.0 / (input_size + hidden_size))
+    b1 = np.zeros(hidden_size)
+    W2 = np.random.randn(hidden_size, 1) * np.sqrt(2.0 / (hidden_size + 1))
+    b2 = np.zeros(1)
+    return W1, b1, W2, b2
+
+def mlp_forward(X: np.ndarray, W1: np.ndarray, b1: np.ndarray, 
+                W2: np.ndarray, b2: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Forward pass through MLP
+    
+    params:
+        X: Input features
+        W1, b1: Hidden layer parameters
+        W2, b2: Output layer parameters
+        
+    return:
+        Tuple of (output probabilities, hidden activations, output pre-activation)
+    """
+    hidden_pre = np.dot(X, W1) + b1
+    hidden = sigmoid(hidden_pre)
+    output_pre = np.dot(hidden, W2) + b2
+    output = sigmoid(output_pre)
+    return output, hidden, output_pre
+
+def mlp_backward(X: np.ndarray, y: np.ndarray, W2: np.ndarray, 
+                output: np.ndarray, hidden: np.ndarray) -> Tuple[Dict[str, np.ndarray], float]:
+    """
+    Backward pass through MLP using cross-entropy loss
+    
+    params:
+        X: Input features
+        y: True labels
+        W2: Output layer weights
+        output: Output probabilities
+        hidden: Hidden layer activations
+        
+    return:
+        Tuple of (gradients dictionary, loss value)
+    """
+    n_samples = X.shape[0]
+    
+    # Compute cross-entropy loss
+    epsilon = 1e-15
+    loss = -np.mean(y * np.log(output + epsilon) + (1 - y) * np.log(1 - output + epsilon))
+    
+    # Output layer gradients
+    delta_output = output - y.reshape(-1, 1)
+    
+    # Hidden layer gradients
+    delta_hidden = np.dot(delta_output, W2.T) * hidden * (1 - hidden)
+    
+    # Compute gradients
+    gradients = {
+        'W1': np.dot(X.T, delta_hidden) / n_samples,
+        'b1': np.mean(delta_hidden, axis=0),
+        'W2': np.dot(hidden.T, delta_output) / n_samples,
+        'b2': np.mean(delta_output, axis=0)
+    }
+    
+    return gradients, loss
+
+def train_mlp(X: np.ndarray, y: np.ndarray, learning_rate: float, 
+              num_epochs: int) -> Tuple[Dict[str, np.ndarray], List[float], List[float], Dict]:
+    """
+    Train MLP model
+    
+    params:
+        X: Training features
+        y: Target values
+        learning_rate: Learning rate
+        num_epochs: Number of epochs
+        
+    return:
+        Tuple of:
+        - Dictionary of trained parameters
+        - List of accuracies per epoch
+        - List of losses per epoch
+        - Dictionary of computational metrics
+    """
+    n_samples, n_features = X.shape
+    W1, b1, W2, b2 = initialize_mlp_params(n_features)
+    accuracies = []
+    losses = []
+    
+    # Metrics tracking
+    start_time = time.time()
+    total_flops = 0
+    
+    for epoch in range(num_epochs):
+        # Forward pass
+        output, hidden, _ = mlp_forward(X, W1, b1, W2, b2)
+        
+        # Backward pass
+        gradients, loss = mlp_backward(X, y, W2, output, hidden)
+        
+        # Update parameters
+        W1 -= learning_rate * gradients['W1']
+        b1 -= learning_rate * gradients['b1']
+        W2 -= learning_rate * gradients['W2']
+        b2 -= learning_rate * gradients['b2']
+        
+        # Track metrics
+        predictions = (output >= 0.5).reshape(-1)
+        accuracy = np.mean(predictions == y)
+        accuracies.append(accuracy)
+        losses.append(loss)
+        
+        # Track FLOPs
+        epoch_flops = (
+            2 * n_samples * n_features * 10 +  # Hidden layer forward
+            2 * n_samples * 10 +  # Hidden layer activation
+            2 * n_samples * 10 +  # Output layer forward
+            n_samples +  # Output layer activation
+            n_samples * 10 * 2 +  # Backprop through hidden layer
+            n_features * 10 * 2  # Weight updates
+        )
+        total_flops += epoch_flops
+    
+    wall_time = time.time() - start_time
+    metrics = {
+        'wall_time': wall_time,
+        'total_flops': total_flops,
+        'flops_per_epoch': total_flops / num_epochs
+    }
+    
+    params = {'W1': W1, 'b1': b1, 'W2': W2, 'b2': b2}
+    return params, accuracies, losses, metrics
+
+def compare_lr_vs_mlp(train_file: str, learning_rates: List[float], num_epochs: int) -> None:
+    """
+    Compare Logistic Regression vs MLP performance across learning rates
+    
+    params:
+        train_file: Path to training data
+        learning_rates: List of learning rates to try
+        num_epochs: Number of epochs
+    """
+    X, y = load_data(train_file)
+    
+    # Storage for results
+    lr_results = []
+    mlp_results = []
+    
+    # Train both models with different learning rates
+    for lr in learning_rates:
+        # Logistic Regression
+        _, _, lr_acc, lr_metrics = train_sgd_logistic_regression(X, y, lr, num_epochs, len(X))
+        lr_results.append({
+            'learning_rate': lr,
+            'accuracies': lr_acc,
+            'metrics': lr_metrics
+        })
+        
+        # MLP
+        _, mlp_acc, mlp_losses, mlp_metrics = train_mlp(X, y, lr, num_epochs)
+        mlp_results.append({
+            'learning_rate': lr,
+            'accuracies': mlp_acc,
+            'losses': mlp_losses,
+            'metrics': mlp_metrics
+        })
+    
+    # Create comparison plots
+    plt.figure(figsize=(15, 10))
+    
+    # Plot 1: Accuracy vs Epoch for both models
+    plt.subplot(2, 2, 1)
+    for result in lr_results:
+        plt.plot(range(1, num_epochs + 1), result['accuracies'], 
+                '--', label=f'LR (lr={result["learning_rate"]})')
+    for result in mlp_results:
+        plt.plot(range(1, num_epochs + 1), result['accuracies'], 
+                '-', label=f'MLP (lr={result["learning_rate"]})')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Model Convergence Comparison')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True)
+    
+    # Plot 2: Final Accuracy vs Learning Rate
+    plt.subplot(2, 2, 2)
+    lr_final_acc = [result['accuracies'][-1] for result in lr_results]
+    mlp_final_acc = [result['accuracies'][-1] for result in mlp_results]
+    plt.semilogx(learning_rates, lr_final_acc, 'b--o', label='Logistic Regression')
+    plt.semilogx(learning_rates, mlp_final_acc, 'r-o', label='MLP')
+    plt.xlabel('Learning Rate (log scale)')
+    plt.ylabel('Final Accuracy')
+    plt.title('Final Performance vs Learning Rate')
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot 3: Training Time Comparison
+    plt.subplot(2, 2, 3)
+    lr_times = [result['metrics']['wall_time'] for result in lr_results]
+    mlp_times = [result['metrics']['wall_time'] for result in mlp_results]
+    plt.semilogx(learning_rates, lr_times, 'b--o', label='Logistic Regression')
+    plt.semilogx(learning_rates, mlp_times, 'r-o', label='MLP')
+    plt.xlabel('Learning Rate (log scale)')
+    plt.ylabel('Training Time (seconds)')
+    plt.title('Computational Efficiency')
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot 4: MLP Loss Curves
+    plt.subplot(2, 2, 4)
+    for result in mlp_results:
+        plt.plot(range(1, num_epochs + 1), result['losses'], 
+                label=f'lr={result["learning_rate"]}')
+    plt.xlabel('Epoch')
+    plt.ylabel('Cross-Entropy Loss')
+    plt.title('MLP Loss Convergence')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('model_comparison.png', bbox_inches='tight')
+    plt.close()
+    
+    # Print detailed comparison
+    print("\nModel Comparison Analysis:")
+    print("-" * 100)
+    print(f"{'Learning Rate':^12} | {'LR Accuracy':^12} | {'MLP Accuracy':^12} | "
+          f"{'LR Time (s)':^12} | {'MLP Time (s)':^12} | {'LR FLOPs':^15} | {'MLP FLOPs':^15}")
+    print("-" * 100)
+    
+    for lr_res, mlp_res in zip(lr_results, mlp_results):
+        lr = lr_res['learning_rate']
+        print(f"{lr:^12.3e} | {lr_res['accuracies'][-1]:^12.4f} | "
+              f"{mlp_res['accuracies'][-1]:^12.4f} | {lr_res['metrics']['wall_time']:^12.3f} | "
+              f"{mlp_res['metrics']['wall_time']:^12.3f} | {lr_res['metrics']['total_flops']:^15.2e} | "
+              f"{mlp_res['metrics']['total_flops']:^15.2e}")
 
 def main():
     # Get command line arguments
@@ -68,11 +516,21 @@ def main():
     
     # Load training data and train model
     X, y = load_data(train_file)
-    weights, bias = train_logistic_regression(X, y, learning_rate, num_epochs)
+    weights, bias, _ = train_logistic_regression(X, y, learning_rate, num_epochs)
     
     # Print parameters (weights followed by bias) on a single line
     print(" ".join(map(str, np.concatenate([weights, [bias]]))))
+    
+    # Generate accuracy plots
+    learning_rates = [0.001, 0.01, 0.1, 1.0, 10.0]
+    plot_accuracy_vs_epoch(train_file, learning_rates, num_epochs)
+    
+    # Analyze SGD performance
+    batch_sizes = [1, 4, 16, 64, 256, len(X)]  # From single sample to full batch
+    analyze_sgd_performance(train_file, learning_rate, num_epochs, batch_sizes)
+    
+    # Compare Logistic Regression vs MLP
+    compare_lr_vs_mlp(train_file, learning_rates, num_epochs)
 
 if __name__ == "__main__":
     main()
-
